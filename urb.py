@@ -15,7 +15,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 from mpl_toolkits.mplot3d import axes3d # pylint: disable=unused-import
 
-OSCILLOSCOPE_IP_ADDRESS = '130.216.55.153'
+OSCILLOSCOPE_IP_ADDRESS = '130.216.57.190'
 OSCILLOSCOPE_PORT = 4000
 OSCILLOSCOPE_FORCE = True
 
@@ -93,8 +93,11 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
         sub_frame = tk.Frame(self)
         tk.Label(sub_frame, text='Save: ').pack(side='left')
         for channel in self.scope.channel_list:
-            text = 'Ch {}'.format(channel.number)
-            tk.Button(sub_frame, text=text, command=channel.save).pack(side='left')
+            channel.button = tk.Button(sub_frame)
+            channel.button['text'] = 'Ch {}'.format(channel.number)
+            channel.button['command']= channel.save
+            channel.button.pack(side='left')
+
         sub_frame.pack(side='top')
 
         # Plots
@@ -337,6 +340,9 @@ class UltrasonicRelayBox():
                 socket.connect((self.ip_address, self.port))
             except timeout:
                 print('connection to {} timed out'.format(self.ip_address))
+                return
+            except OSError:
+                print('could not find path to {}'.format(self.ip_address))
                 return
             socket.send(bytes('Clear\r\n', encoding='ascii'))
             query = literal_eval(recv_end(socket))
