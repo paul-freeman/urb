@@ -1,6 +1,7 @@
 """A basic interface to the Ultrasonic Relay Boxes"""
 import sys
 from time import sleep
+from functools import partial
 from ast import literal_eval
 from tkinter import filedialog
 import tkinter as tk
@@ -95,7 +96,8 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
         for channel in self.scope.channel_list:
             channel.button = tk.Button(sub_frame)
             channel.button['text'] = 'Ch {}'.format(channel.number)
-            channel.button['command']= channel.save
+            cmd = partial(channel.save, self.data, self.config)
+            channel.button['command'] = cmd
             channel.button.pack(side='left')
 
         sub_frame.pack(side='top')
