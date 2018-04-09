@@ -19,6 +19,7 @@ from mpl_toolkits.mplot3d import axes3d # pylint: disable=unused-import
 OSCILLOSCOPE_IP_ADDRESS = '130.216.57.190'
 OSCILLOSCOPE_PORT = 4000
 OSCILLOSCOPE_FORCE = True
+CHANNELS = 4
 
 URB_SRC_IP_ADDRESS = 'ultrasonic-src01'
 URB_RCV_IP_ADDRESS = 'ultrasonic-rcvr01'
@@ -40,9 +41,9 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
                        'scale': tk.StringVar(),
                        'lag': tk.StringVar()}
         self.data = {'P':[], 'S1':[], 'S2':[]}
-        self.src = UltrasonicRelayBox(ip_address=URB_SRC_IP_ADDRESS)
-        self.rcvr = UltrasonicRelayBox(ip_address=URB_RCV_IP_ADDRESS)
-        self.scope = Oscilloscope()
+        self.src = UltrasonicRelayBox(ip_address=URB_SRC_IP_ADDRESS, port=URB_PORT)
+        self.rcvr = UltrasonicRelayBox(ip_address=URB_RCV_IP_ADDRESS, port=URB_PORT)
+        self.channel_list = [Channel(channelnum + 1) for channelnum in range(CHANNELS)]
         self.pack()
         self.create_widgets()
 
@@ -61,46 +62,21 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
             URBFrame(self, src, rcv, num).pack(side='top')
 
         # Wave/Pressure/TimeLag input
-        sub_frame = tk.Frame(self)
-        # Wave Radio Buttons
-        sub_sub_frame = tk.Frame(sub_frame, padx=10)
-        label = tk.Label(sub_sub_frame)
-        label.config(text='Wave type: ')
-        label.pack(side='left')
-        self.config['wave'].set('P')
-        modes = [('P wave', 'P'), ('S1 wave', 'S1'), ('S2 wave', 'S2')]
-        for text, mode in modes:
-            tk.Radiobutton(
-                sub_sub_frame,
-                text=text,
-                variable=self.config['wave'],
-                value=mode).pack(side='left')
-        sub_sub_frame.pack(side='left')
-        # Pressure Entry
-        sub_sub_frame = tk.Frame(sub_frame, padx=10)
-        label = tk.Label(sub_sub_frame, text='Pressure: ').pack(side='left')
-        self.config['pressure'].set('0.0')
-        tk.Entry(sub_sub_frame, textvariable=self.config['pressure']).pack(side='left')
-        sub_sub_frame.pack(side='left')
-        # Lag Entry
-        sub_sub_frame = tk.Frame(sub_frame, padx=10)
-        tk.Label(sub_sub_frame, text='Time lag: ').pack(side='left')
-        self.config['lag'].set('0.0')
-        tk.Entry(sub_sub_frame, textvariable=self.config['lag']).pack(side='left')
-        sub_sub_frame.pack(side='left')
-        sub_frame.pack(side='top')
+        self.make_input_frame()
 
         # Save Buttons
-        sub_frame = tk.Frame(self)
-        tk.Label(sub_frame, text='Save: ').pack(side='left')
-        for channel in self.scope.channel_list:
-            channel.button = tk.Button(sub_frame)
-            channel.button['text'] = 'Ch {}'.format(channel.number)
-            cmd = partial(channel.save, self.data, self.config)
-            channel.button['command'] = cmd
-            channel.button.pack(side='left')
-
-        sub_frame.pack(side='top')
+        frame = tk.Frame(self)
+        for wave_type in sorted(self.data):
+            sub_frame = tk.Frame(frame)
+            tk.Label(sub_frame, text='Save {}: '.format(wave_type)).pack(side='left')
+            for channel in self.channel_list:
+                channel.button = tk.Button(sub_frame)
+                channel.button['text'] = 'Ch {}'.format(channel.number)
+                cmd = partial(self.save, channel, wave_type)
+                channel.button['command'] = cmd
+                channel.button.pack(side='left')
+            sub_frame.pack(side='left', padx=90)
+        frame.pack(side='top')
 
         # Plots
         self.canvas.get_tk_widget().pack(side='top')
@@ -131,6 +107,29 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
 
         self.draw_canvas()
 
+    def make_input_frame(self):
+        """Create the sub frame for the input values"""
+        sub_frame = tk.Frame(self)
+        # Pressure Entry
+        sub_sub_frame = tk.Frame(sub_frame, padx=10)
+        tk.Label(sub_sub_frame, text='Pressure: ').pack(side='left')
+        self.config['pressure'].set('0.0')
+        tk.Entry(sub_sub_frame, textvariable=self.config['pressure']).pack(side='left')
+        sub_sub_frame.pack(side='left')
+        # Lag Entry
+        sub_sub_frame = tk.Frame(sub_frame, padx=10)
+        tk.Label(sub_sub_frame, text='Time lag: ').pack(side='left')
+        self.config['lag'].set('0.0')
+        tk.Entry(sub_sub_frame, textvariable=self.config['lag']).pack(side='left')
+        sub_sub_frame.pack(side='left')
+        sub_frame.pack(side='top')
+
+    def save(self, channel, wave_type):
+        """Call save on the requested channel and redraw"""
+        self.config['wave'].set(wave_type)
+        channel.save(self.data, self.config)
+        self.draw_canvas()
+
     def draw_canvas(self):
         """Draw the plotting canvas"""
         cmap = cm.get_cmap('viridis')
@@ -138,12 +137,12 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
         self.fig.clear()
         for i, (wave_type, data) in enumerate(sorted(self.data.items())):
             if self.config['arrange'].get() == 'both':
-                ax = self.fig.add_subplot(1, 3, i+1, projection='3d')
-                ax.clear()
+                axes = self.fig.add_subplot(1, 3, i+1, projection='3d')
+                axes.clear()
             else:
-                ax = self.fig.add_subplot(1, 3, i+1)
-                ax.clear()
-            ax.set_title(title[wave_type])
+                axes = self.fig.add_subplot(1, 3, i+1)
+                axes.clear()
+            axes.set_title(title[wave_type])
             for count, (pressure, lag, trace) in enumerate(reversed(data)):
                 sample = len(data) - count # because reversed
                 if len(data) <= 1:
@@ -153,18 +152,18 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
                 arrange = self.config['arrange']
                 scale = self.config['scale']
                 if arrange.get() == 'count':
-                    ax.plot(trace[0] - lag,
-                            trace[1] * float(scale.get()) + sample,
-                            color=cmap(value))
+                    axes.plot(trace[0] - lag,
+                              trace[1] * float(scale.get()) + sample,
+                              color=cmap(value))
                 elif arrange.get() == 'pressure':
-                    ax.plot(trace[0] - lag,
-                            trace[1] * float(scale.get()) + pressure,
-                            color=cmap(value))
+                    axes.plot(trace[0] - lag,
+                              trace[1] * float(scale.get()) + pressure,
+                              color=cmap(value))
                 elif arrange.get() == 'both':
-                    ax.plot(trace[0] - lag,
-                            [sample] * len(trace[0]),
-                            trace[1] * float(scale.get()) + pressure,
-                            color=cmap(value))
+                    axes.plot(trace[0] - lag,
+                              [sample] * len(trace[0]),
+                              trace[1] * float(scale.get()) + pressure,
+                              color=cmap(value))
         self.canvas.draw()
 
     def load_file(self):
@@ -252,46 +251,34 @@ class StackFrame(tk.Frame): # pylint: disable=too-many-ancestors
         tk.Frame.__init__(self, master)
         tk.Label(self, text='{}: '.format(stack.get_type())).pack(side='left')
         if stack.connected:
-            bg, fg = STACK_CONNECTED_COLOR
+            bg_value, fg_value = STACK_CONNECTED_COLOR
         else:
-            bg, fg = STACK_DISCONNECTED_COLOR
+            bg_value, fg_value = STACK_DISCONNECTED_COLOR
         # P button
-        stack.button_dict['P'] = tk.Button(self, fg=fg, bg=bg)
+        stack.button_dict['P'] = tk.Button(self, fg=fg_value, bg=bg_value)
         stack.button_dict['P']['text'] = 'P wave {}'.format(stack.stacknum)
         if stack.connected:
             stack.button_dict['P']['command'] = stack.toggle_p
         stack.button_dict['P'].pack(side='left')
         # S1 button
-        stack.button_dict['S1'] = tk.Button(self, fg=fg, bg=bg)
+        stack.button_dict['S1'] = tk.Button(self, fg=fg_value, bg=bg_value)
         stack.button_dict['S1']['text'] = 'S1 wave {}'.format(stack.stacknum)
         if stack.connected:
             stack.button_dict['S1']['command'] = stack.toggle_s1
         stack.button_dict['S1'].pack(side='left')
         # S2 button
-        stack.button_dict['S2'] = tk.Button(self, fg=fg, bg=bg)
+        stack.button_dict['S2'] = tk.Button(self, fg=fg_value, bg=bg_value)
         stack.button_dict['S2']['text'] = 'S2 wave {}'.format(stack.stacknum)
         if stack.connected:
             stack.button_dict['S2']['command'] = stack.toggle_s2
         stack.button_dict['S2'].pack(side='left')
 
-class Oscilloscope():
-    """The Tektronix Oscilloscope"""
-    def __init__(self, channels=4):
-        self.ip_address = OSCILLOSCOPE_IP_ADDRESS
-        self.port = 4000
-        self.channel_list = [Channel(channelnum + 1, self) for channelnum in range(channels)]
-        self.button_list = [None] * channels
-        self.load = None
-        self.save = None
-        self.data = None
-
 class Channel():
     """A channel on the oscilloscope"""
-    def __init__(self, number, scope):
+    def __init__(self, number):
         self.number = number
-        self.scope = scope
 
-    def save(self, data, config):
+    def save(self, data, settings):
         """Save a trace into the data"""
         name = 'DPO3014'
         # execute the PLACE code to get data from the oscilloscope
@@ -302,9 +289,10 @@ class Channel():
             instrument.config(metadata, 1)
             waveform = instrument.update()[name + '-trace'][0][self.number-1]
             time, volts = self.transform_data(waveform, metadata)
-            data[config['wave'].get()].append(
-                (float(config['pressure'].get()), np.array([time, volts])))
-            self.scope.draw_canvas()
+            data[settings['wave'].get()].append(
+                (float(settings['pressure'].get()),
+                 float(settings['lag'].get()),
+                 np.array([time, volts])))
         except OSError:
             print('connection to {} timed out'.format(OSCILLOSCOPE_IP_ADDRESS))
 
@@ -327,12 +315,16 @@ class Channel():
 
 class UltrasonicRelayBox():
     """An Ultrasonic Relay Box"""
-    def __init__(self, ip_address='192.168.0.0', port=URB_PORT, stacks=1):
+    def __init__(self, ip_address, port, stacks=1):
         self.ip_address = ip_address
         self.port = port
         self.stack_list = [Stack(stacknum + 1, self) for stacknum in range(stacks)]
         self.type = 'Unknown'
         self.clear()  # cannot use this during testing
+
+    def get_stack_number(self):
+        """Return the number of stacks in the relay box"""
+        return len(self.stack_list)
 
     def clear(self):
         """Set all relays in this URB to the 'None' state."""
@@ -390,20 +382,20 @@ class Stack():
     def _toggle(self, wave):
         # if the current mode is the new mode, set wave to none
         if self.mode == wave:
-            bg, fg = STACK_CONNECTED_COLOR
+            bg_value, fg_value = STACK_CONNECTED_COLOR
             print('turn {} off'.format(wave))
             self._mode('None')
-            self.button_dict[wave]['fg'] = fg
-            self.button_dict[wave]['bg'] = bg
+            self.button_dict[wave]['fg'] = fg_value
+            self.button_dict[wave]['bg'] = bg_value
             return
         # otherwise, toggle the current mode and turn on the new mode
         if self.mode != 'None':
             self._toggle(self.mode)
         print('turn {} on'.format(wave))
         self._mode(wave)
-        bg, fg = STACK_ACTIVE_COLOR
-        self.button_dict[wave]['fg'] = fg
-        self.button_dict[wave]['bg'] = bg
+        bg_value, fg_value = STACK_ACTIVE_COLOR
+        self.button_dict[wave]['fg'] = fg_value
+        self.button_dict[wave]['bg'] = bg_value
 
 def recv_end(socket):
     """Receive data until the line termination is seen."""
@@ -492,7 +484,7 @@ class MSO3000andDPO3000Series():
         self._scope = Socket(AF_INET, SOCK_STREAM)
         self._scope.settimeout(5.0)
         self._scope.connect((self._ip_address, 4000))
-        self._activate_acquisition()
+        #self._activate_acquisition()
         field = '{}-trace'.format(self.__class__.__name__)
         type_ = '({:d},{:d})int16'.format(len(self._channels), self._record_length)
         data = np.zeros((1,), dtype=[(field, type_)])
