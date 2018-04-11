@@ -1,5 +1,7 @@
 """A basic interface to the Ultrasonic Relay Boxes"""
 import sys
+import os.path
+import glob
 from time import sleep
 from functools import partial
 from ast import literal_eval
@@ -12,7 +14,7 @@ import matplotlib
 matplotlib.use('TkAgg')
 # pylint: disable=wrong-import-position
 from matplotlib import cm
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2TkAgg
 from matplotlib.figure import Figure
 from mpl_toolkits.mplot3d import axes3d # pylint: disable=unused-import
 
@@ -29,12 +31,14 @@ STACK_ACTIVE_COLOR = 'green', 'white'
 STACK_CONNECTED_COLOR = 'red', 'white'
 STACK_DISCONNECTED_COLOR = 'grey', 'white'
 
+
 class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
     """A basic interface to the Ultrasonic Relay Boxes"""
     def __init__(self, master=None):
         tk.Frame.__init__(self, master)
         self.fig = Figure(figsize=(16, 6))
         self.canvas = FigureCanvasTkAgg(self.fig, master=self)
+        NavigationToolbar2TkAgg(self.canvas, self)
         self.config = {'arrange': tk.StringVar(),
                        'wave': tk.StringVar(),
                        'pressure': tk.StringVar(),
@@ -47,23 +51,23 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
         self.pack()
         self.create_widgets()
 
+
     def create_widgets(self):
         """Generate the URB GUI."""
         # Menu items
         menubar = tk.Menu(self)
         filemenu = tk.Menu(menubar, tearoff=0)
-        filemenu.add_command(label='Load', command=self.load_file)
-        filemenu.add_command(label='Save', command=self.save_file)
+        filemenu.add_command(label='Load NPY file...', command=self.load_file)
+        filemenu.add_command(label='Save NPY file...', command=self.save_file)
+        filemenu.add_command(label='Load CSVs from directory...', command=self.load_folder)
+        filemenu.add_command(label='Save CSVs to directory...', command=self.save_folder)
         menubar.add_cascade(label='File', menu=filemenu)
         self.master.config(menu=menubar)
-
         # URB Wave Buttons
         for num, (src, rcv) in enumerate(zip(self.src.stack_list, self.rcvr.stack_list)):
             URBFrame(self, src, rcv, num).pack(side='top')
-
         # Wave/Pressure/TimeLag input
         self.make_input_frame()
-
         # Save Buttons
         frame = tk.Frame(self)
         for wave_type in sorted(self.data):
@@ -77,15 +81,16 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
                 channel.button.pack(side='left')
             sub_frame.pack(side='left', padx=90)
         frame.pack(side='top')
-
         # Plots
         self.canvas.get_tk_widget().pack(side='top')
-
         # Arrangement Radio Buttons
         sub_frame = tk.Frame(self)
         tk.Label(sub_frame, text='Plot type:').pack(side='left')
         self.config['arrange'].set('count')
-        modes = [('Count', 'count'), ('Pressure', 'pressure'), ('Both', 'both')]
+        modes = [('Last', 'last'),
+                 ('Count', 'count'),
+                 ('Pressure', 'pressure'),
+                 ('Both', 'both')]
         for text, mode in modes:
             tk.Radiobutton(
                 sub_frame,
@@ -94,7 +99,6 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
                 value=mode,
                 command=self.draw_canvas).pack(side='left')
         sub_frame.pack(side='top')
-
         # Scale input
         sub_frame = tk.Frame(self)
         label = tk.Label(sub_frame)
@@ -104,8 +108,9 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
         tk.Entry(sub_frame, textvariable=self.config['scale']).pack(side='left')
         tk.Button(sub_frame, text='Update', command=self.draw_canvas).pack(side='left')
         sub_frame.pack(side='top')
-
+        # Draw
         self.draw_canvas()
+
 
     def make_input_frame(self):
         """Create the sub frame for the input values"""
@@ -124,11 +129,13 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
         sub_sub_frame.pack(side='left')
         sub_frame.pack(side='top')
 
+
     def save(self, channel, wave_type):
         """Call save on the requested channel and redraw"""
         self.config['wave'].set(wave_type)
         channel.save(self.data, self.config)
         self.draw_canvas()
+
 
     def draw_canvas(self):
         """Draw the plotting canvas"""
@@ -151,7 +158,11 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
                     value = (sample-1)/(len(data)-1)
                 arrange = self.config['arrange']
                 scale = self.config['scale']
-                if arrange.get() == 'count':
+                if arrange.get() == 'last':
+                    axes.plot(trace[0] - lag,
+                              trace[1] * float(scale.get()))
+                    break
+                elif arrange.get() == 'count':
                     axes.plot(trace[0] - lag,
                               trace[1] * float(scale.get()) + sample,
                               color=cmap(value))
@@ -166,31 +177,36 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
                               color=cmap(value))
         self.canvas.draw()
 
+
     def load_file(self):
-        """Load data from disk"""
+        """Load NPY data from disk"""
         filename = filedialog.askopenfilename(
-            defaultextension='.csv',
-            filetypes=[('CSV', '*.csv'), ('NPY', '*.npy')],
+            defaultextension='.npy',
+            filetypes=[('NPY', '*.npy')],
             title='Select file to load')
         if not filename:
             return
-        if filename[-3:].lower() == 'npy':
-            with open(filename, 'rb') as f_in:
-                self.data = np.load(f_in).tolist()
-        else:
+        with open(filename, 'rb') as f_in:
+            self.data = np.load(f_in).tolist()
+        self.draw_canvas()
+
+
+    def load_folder(self):
+        """Load CSV data from separate files in a folder"""
+        self.data = {'P':[], 'S1':[], 'S2':[]}
+        for path in glob.iglob(os.path.join(filedialog.askdirectory(), 'Wave_*.csv')):
+            values = os.path.splitext(os.path.split(path)[1])[0].split('_')
+            wave_type = values[1]
+            sample = literal_eval(values[2][len('Num'):])
+            pressure = literal_eval(values[3][len('Press'):])
+            lag = literal_eval(values[4][len('Lag'):])
             raw_data = np.loadtxt(
-                filename,
-                dtype=[('wave', 'S5'),
-                       ('sample', '<i4'),
-                       ('pressure', '<f4'),
-                       ('lag', '<f4'),
-                       ('time', '<f4'),
+                path,
+                dtype=[('time', '<f4'),
                        ('voltage', '<f4')],
                 delimiter=',',
                 skiprows=1)
-            self.data = {'P':[], 'S1':[], 'S2':[]}
-            for wave_type, sample, pressure, lag, time, volt in raw_data:
-                wave_type = literal_eval(wave_type.decode()).decode()
+            for time, volt in raw_data:
                 try:
                     curr_pressure, curr_lag, trace = self.data[wave_type][sample]
                     if curr_pressure != pressure:
@@ -200,42 +216,40 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
                     trace.append((time, volt))
                 except IndexError:
                     self.data[wave_type].append((pressure, lag, [(time, volt)]))
-            for wave_type in self.data:
-                for i, (pressure, lag, trace) in enumerate(self.data[wave_type]):
-                    trace = np.asarray(trace).T
-                    time = np.asarray(trace[0])
-                    volts = np.asarray(trace[1])
-                    self.data[wave_type][i] = (pressure, lag, np.array([time, volts]))
+        for wave_type in self.data:
+            for i, (pressure, lag, trace) in enumerate(self.data[wave_type]):
+                trace = np.asarray(trace).T
+                time = np.asarray(trace[0])
+                volts = np.asarray(trace[1])
+                self.data[wave_type][i] = (pressure, lag, np.array([time, volts]))
         self.draw_canvas()
 
+
     def save_file(self):
-        """Save data to disk"""
+        """Save NPY data to disk"""
         filename = filedialog.asksaveasfilename(
-            defaultextension='.csv',
-            filetypes=[('CSV', '*.csv'), ('NPY', '*.npy')],
-            initialfile='wave_data.csv',
+            defaultextension='.npy',
+            filetypes=[('NPY', '*.npy')],
+            initialfile='wave_data.npy',
             title='Select output file')
-        if not filename:
-            return
-        extn = filename[-3:].lower()
-        if extn == 'npy':
-            with open(filename, 'wb') as f_out:
-                np.save(f_out, self.data)
-        else:
-            data = []
-            for wave_type, waves in self.data.items():
-                for sample, (pressure, lag, trace) in enumerate(waves):
-                    for time, volt in trace.T:
-                        data.append((wave_type, sample, pressure, lag, time, volt))
-            save_data = np.asarray(data, dtype=[
-                ('wave', 'S2'),
-                ('sample', '<i4'),
-                ('pressure', '<f4'),
-                ('lag', '<f4'),
-                ('time', '<f4'),
-                ('voltage', '<f4')])
-            np.savetxt(filename, save_data, fmt='%s,%i,%.4f,%.6f,%.6f,%.6f',
-                       header='Wave,Count,Pressure,Lag,Time,Voltage')
+        with open(filename, 'xb') as f_out:
+            np.save(f_out, self.data)
+
+
+    def save_folder(self):
+        """Save CSV data to separate files in a folder"""
+        folder = filedialog.askdirectory()
+        for wave_type, waves in self.data.items():
+            for sample, (pressure, lag, trace) in enumerate(waves):
+                filename = 'Wave_{}_Num{}_Press{:.4f}_Lag{:.6f}.csv'.format(
+                    wave_type, sample, pressure, lag)
+                data = []
+                for time, volt in trace.T:
+                    data.append((time, volt))
+                save_data = np.asarray(data, dtype=[('time', '<f4'), ('voltage', '<f4')])
+                path = os.path.join(folder, filename)
+                np.savetxt(path, save_data, fmt='%.6f,%.6f', header='Time,Voltage')
+
 
 class URBFrame(tk.Frame): # pylint: disable=too-many-ancestors
     """Defines a Frame to describe a URB"""
@@ -244,6 +258,7 @@ class URBFrame(tk.Frame): # pylint: disable=too-many-ancestors
         tk.Label(self, text='URB {}: '.format(num)).pack(side='left')
         StackFrame(self, src).pack(side='left', padx=10)
         StackFrame(self, rcv).pack(side='left', padx=10)
+
 
 class StackFrame(tk.Frame): # pylint: disable=too-many-ancestors
     """Defines a Frame to describe a stack"""
@@ -273,10 +288,12 @@ class StackFrame(tk.Frame): # pylint: disable=too-many-ancestors
             stack.button_dict['S2']['command'] = stack.toggle_s2
         stack.button_dict['S2'].pack(side='left')
 
+
 class Channel():
     """A channel on the oscilloscope"""
     def __init__(self, number):
         self.number = number
+
 
     def save(self, data, settings):
         """Save a trace into the data"""
@@ -296,6 +313,7 @@ class Channel():
         except OSError:
             print('connection to {} timed out'.format(OSCILLOSCOPE_IP_ADDRESS))
 
+
     def transform_data(self, waveform, metadata):
         """convert waveform to proper values"""
         print('performing calculations... ', end='')
@@ -313,6 +331,7 @@ class Channel():
         print('done')
         return time, volts
 
+
 class UltrasonicRelayBox():
     """An Ultrasonic Relay Box"""
     def __init__(self, ip_address, port, stacks=1):
@@ -322,9 +341,11 @@ class UltrasonicRelayBox():
         self.type = 'Unknown'
         self.clear()  # cannot use this during testing
 
+
     def get_stack_number(self):
         """Return the number of stacks in the relay box"""
         return len(self.stack_list)
+
 
     def clear(self):
         """Set all relays in this URB to the 'None' state."""
@@ -345,6 +366,7 @@ class UltrasonicRelayBox():
             for stack in self.stack_list:
                 stack.connected = True
 
+
 class Stack():
     """A stack on an Ultrasonic Relay Box"""
     def __init__(self, stacknum, urb):
@@ -354,21 +376,26 @@ class Stack():
         self.button_dict = {'P': None, 'S1': None, 'S2': None}
         self.connected = False
 
+
     def get_type(self):
         """Return the URB type."""
         return self.urb.type
+
 
     def toggle_p(self):
         """Toggle the P wave on or off."""
         self._toggle('P')
 
+
     def toggle_s1(self):
         """Toggle the S1 wave on or off."""
         self._toggle('S1')
 
+
     def toggle_s2(self):
         """Toggle the S2 wave on or off."""
         self._toggle('S2')
+
 
     def _mode(self, wave):
         with Socket(AF_INET, SOCK_STREAM) as socket:
@@ -378,6 +405,7 @@ class Stack():
             query = literal_eval(recv_end(socket))
             socket.shutdown(SHUT_RDWR)
         self.mode = query['mode']
+
 
     def _toggle(self, wave):
         # if the current mode is the new mode, set wave to none
@@ -397,6 +425,7 @@ class Stack():
         self.button_dict[wave]['fg'] = fg_value
         self.button_dict[wave]['bg'] = bg_value
 
+
 def recv_end(socket):
     """Receive data until the line termination is seen."""
     total_data = ''
@@ -413,11 +442,13 @@ def recv_end(socket):
         total_data += data
     return total_data
 
+
 class MSO3000andDPO3000Series():
     #pylint: disable=too-many-instance-attributes
     """PLACE device class for the MSO3000 and DPO3000 series oscilloscopes."""
     _bytes_per_sample = 2
     _data_type = np.dtype('<i'+str(_bytes_per_sample)) # (<)little-endian, (i)signed integer
+
 
     def __init__(self, config):
         self._config = config
@@ -430,6 +461,7 @@ class MSO3000andDPO3000Series():
         self._record_length = None
         self._x_zero = None
         self._x_increment = None
+
 
     def config(self, metadata, total_updates):
         """Configure the oscilloscope.
@@ -475,6 +507,7 @@ class MSO3000andDPO3000Series():
             metadata[name + '-ch{:d}_y_multiplier'.format(chan)] = self._get_y_multiplier(chan)
         self._scope.close()
 
+
     def update(self):
         """Get data from the oscilloscope.
 
@@ -500,6 +533,7 @@ class MSO3000andDPO3000Series():
         print('done')
         return data.copy()
 
+
     def cleanup(self, abort=False):
         """End the experiment.
 
@@ -509,11 +543,13 @@ class MSO3000andDPO3000Series():
         """
         pass
 
+
     def _clear_errors(self):
         self._scope.sendall(bytes(':*ESR?;:ALLEv?\n', encoding='ascii'))
         dat = ''
         while '\n' not in dat:
             dat += self._scope.recv(4096).decode('ascii')
+
 
     def _is_active(self, channel):
         self._scope.settimeout(5.0)
@@ -530,6 +566,7 @@ class MSO3000andDPO3000Series():
         self._clear_errors()
         return int(dat) == 0
 
+
     def _get_num_analog_channels(self):
         self._scope.settimeout(5.0)
         self._scope.sendall(b':CONFIGURATION:ANALOG:NUMCHANNELS?\n')
@@ -537,6 +574,7 @@ class MSO3000andDPO3000Series():
         while '\n' not in dat:
             dat += self._scope.recv(4096).decode('ascii')
         return int(dat)
+
 
     def _get_x_zero(self, channel):
         self._scope.settimeout(5.0)
@@ -548,6 +586,7 @@ class MSO3000andDPO3000Series():
             dat += self._scope.recv(4096).decode('ascii')
         return float(dat)
 
+
     def _get_y_zero(self, channel):
         self._scope.settimeout(5.0)
         self._scope.sendall(bytes(
@@ -557,6 +596,7 @@ class MSO3000andDPO3000Series():
         while '\n' not in dat:
             dat += self._scope.recv(4096).decode('ascii')
         return float(dat)
+
 
     def _get_x_increment(self, channel):
         self._scope.settimeout(5.0)
@@ -568,6 +608,7 @@ class MSO3000andDPO3000Series():
             dat += self._scope.recv(4096).decode('ascii')
         return float(dat)
 
+
     def _get_y_offset(self, channel):
         self._scope.settimeout(5.0)
         self._scope.sendall(bytes(
@@ -577,6 +618,7 @@ class MSO3000andDPO3000Series():
         while '\n' not in dat:
             dat += self._scope.recv(4096).decode('ascii')
         return float(dat)
+
 
     def _get_y_multiplier(self, channel):
         self._scope.settimeout(5.0)
@@ -588,6 +630,7 @@ class MSO3000andDPO3000Series():
             dat += self._scope.recv(4096).decode('ascii')
         return float(dat)
 
+
     def _get_sample_rate(self):
         self._scope.settimeout(5.0)
         self._scope.sendall(b':HEADER OFF;:HORIZONTAL:SAMPLERATE?\n')
@@ -596,6 +639,7 @@ class MSO3000andDPO3000Series():
             dat += self._scope.recv(4096).decode('ascii')
         return float(dat)
 
+
     def _get_record_length(self):
         self._scope.settimeout(5.0)
         self._scope.sendall(b':HEADER OFF;:HORIZONTAL:RECORDLENGTH?\n')
@@ -603,6 +647,7 @@ class MSO3000andDPO3000Series():
         while '\n' not in dat:
             dat += self._scope.recv(4096).decode('ascii')
         return int(dat)
+
 
     def _send_config_msg(self, channel):
         config_msg = bytes(
@@ -623,6 +668,7 @@ class MSO3000andDPO3000Series():
         )
         self._scope.sendall(config_msg)
 
+
     def _activate_acquisition(self):
         self._scope.sendall(b':ACQUIRE:STATE ON\n')
         sleep(0.1)
@@ -630,6 +676,7 @@ class MSO3000andDPO3000Series():
             self._force_trigger()
         else:
             self._wait_for_trigger()
+
 
     def _force_trigger(self):
         for _ in range(120):
@@ -657,6 +704,7 @@ class MSO3000andDPO3000Series():
             if byte == b'0':
                 break
 
+
     def _wait_for_trigger(self):
         print('waiting for trigger(s)... ', end='')
         sys.stdout.flush()
@@ -679,10 +727,12 @@ class MSO3000andDPO3000Series():
         print('done')
         sys.stdout.flush()
 
+
     def _request_curve(self, channel):
         self._scope.settimeout(60.0)
         self._scope.sendall(
             bytes(':DATA:SOURCE CH{:d};:CURVE?\n'.format(channel), encoding='ascii'))
+
 
     def _receive_curve(self):
         hash_message = b''
@@ -697,9 +747,11 @@ class MSO3000andDPO3000Series():
         data = data[:length]
         return np.frombuffer(data, dtype='int16')
 
+
 class DPO3014(MSO3000andDPO3000Series):
     """Subclass for the DPO3014"""
     pass
+
 
 if __name__ == "__main__":
     ROOT = tk.Tk()
