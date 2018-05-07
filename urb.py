@@ -3,7 +3,6 @@ import sys
 import os.path
 import glob
 from time import sleep
-from functools import partial
 from ast import literal_eval
 from tkinter import filedialog
 import tkinter as tk
@@ -31,6 +30,66 @@ STACK_ACTIVE_COLOR = 'green', 'white'
 STACK_CONNECTED_COLOR = 'red', 'white'
 STACK_DISCONNECTED_COLOR = 'grey', 'white'
 
+CHANNEL_ACTIVE_COLOR = 'yellow', 'black'
+CHANNEL_DEACTIVE_COLOR = 'grey', 'white'
+
+DTYPE = '<f4'
+
+
+class TriggeredWave:
+    """Defines a recorded wave with trigger signal"""
+    def __init__(self):
+        self.data = None
+        self.index = 0
+        self.wave_type = ''
+        self.pressure = 0
+        self.time_lag = 0.0
+        
+
+    def load_csv(path):
+        """Load wave data from a CSV file"""
+        values = os.path.splitext(os.path.split(path)[1])[0].split('_')
+        wave_type = values[1]
+        sample = literal_eval(values[2][len('Num'):])
+        pressure = literal_eval(values[3][len('Press'):])
+        lag = literal_eval(values[4][len('Lag'):])
+        raw_data = np.loadtxt(path, dtype=DTYPE, delimiter=',', skiprows=1)
+        for time, volt in raw_data:
+            try:
+                curr_pressure, curr_lag, trace = self.data[wave_type][sample]
+                if curr_pressure != pressure:
+                    raise ValueError('mismatched pressures in data')
+                if curr_lag != lag:
+                    raise ValueError('mismatched lag values in data')
+                trace.append((time, volt))
+            except IndexError:
+                self.data[wave_type].append((pressure, lag, [(time, volt)]))
+            
+
+    def load_data(array):
+        """Load wave data from a NumPy array"""
+        if len(array.shape) != 2 or array.shape[1] != 3:
+            raise AttributeError('array shape must be (n, 3)')
+        self.data = array.astype(DTYPE)
+        self.index = 0
+        self.wave_type = 'NA'
+        self.pressure = 0
+        self.time_lag = 0.0
+
+
+    def write_csv(self, directory):
+        """Write wave to a given directory as CSV"""
+        filename = 'Wave_{}_Num{}_Press{:d}_Lag{:.3f}.csv'.format(
+            self.wave_type,
+            self.index,
+            self.pressure,
+            self.time_lag
+            )
+        path = os.path.join(directory, filename)
+        np.savetxt(path, self.data, fmt='%.6f,%.6f,%.6f', header='Time,Wave(V),Trigger(V)')
+
+
+
 
 class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
     """A basic interface to the Ultrasonic Relay Boxes"""
@@ -43,8 +102,10 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
                        'wave': tk.StringVar(),
                        'pressure': tk.StringVar(),
                        'scale': tk.StringVar(),
-                       'lag': tk.StringVar()}
-        self.data = {'P':[], 'S1':[], 'S2':[]}
+                       'lag': tk.StringVar(),
+                       'channel': tk.StringVar()
+                       }
+        self.waves = []
         self.src = UltrasonicRelayBox(ip_address=URB_SRC_IP_ADDRESS, port=URB_PORT)
         self.rcvr = UltrasonicRelayBox(ip_address=URB_RCV_IP_ADDRESS, port=URB_PORT)
         self.channel_list = [Channel(channelnum + 1) for channelnum in range(CHANNELS)]
@@ -68,18 +129,14 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
             URBFrame(self, src, rcv, num).pack(side='top')
         # Wave/Pressure/TimeLag input
         self.make_input_frame()
-        # Save Buttons
+        # Grab buttons
         frame = tk.Frame(self)
         for wave_type in sorted(self.data):
             sub_frame = tk.Frame(frame)
-            tk.Label(sub_frame, text='Save {}: '.format(wave_type)).pack(side='left')
-            for channel in self.channel_list:
-                channel.button = tk.Button(sub_frame)
-                channel.button['text'] = 'Ch {}'.format(channel.number)
-                cmd = partial(self.save, channel, wave_type)
-                channel.button['command'] = cmd
-                channel.button.pack(side='left')
-            sub_frame.pack(side='left', padx=90)
+            tk.Button(
+                sub_frame,
+                text='Grab {} Wave'.format(wave_type)).pack(side='left')
+            sub_frame.pack(side='left', padx=170)
         frame.pack(side='top')
         # Plots
         self.canvas.get_tk_widget().pack(side='top')
@@ -127,8 +184,21 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
         self.config['lag'].set('0.0')
         tk.Entry(sub_sub_frame, textvariable=self.config['lag']).pack(side='left')
         sub_sub_frame.pack(side='left')
+        # Channels
+        sub_sub_frame = tk.Frame(sub_frame, padx=10)
+        tk.Label(sub_sub_frame, text='Activate channels: ').pack(side='left')
+        for channel in self.channel_list[:-1]:
+            if channel.active:
+                bg_value, fg_value = CHANNEL_ACTIVE_COLOR
+            else:
+                bg_value, fg_value = CHANNEL_DEACTIVE_COLOR
+            channel.button = tk.Button(sub_sub_frame, fg=fg_value, bg=bg_value)
+            channel.button['text'] = 'Ch {}'.format(channel.number)
+            channel.button['command'] = channel.toggle_active
+            channel.button.pack(side='left')
+        self.channel_list[-1].toggle_active()
+        sub_sub_frame.pack(side='left')
         sub_frame.pack(side='top')
-
 
     def save(self, channel, wave_type):
         """Call save on the requested channel and redraw"""
@@ -293,7 +363,18 @@ class Channel():
     """A channel on the oscilloscope"""
     def __init__(self, number):
         self.number = number
+        self.active = False
+        self.button = {}
 
+    def toggle_active(self):
+        """Toggle a channel on/off"""
+        self.active = not self.active
+        if self.active:
+            bg_value, fg_value = CHANNEL_ACTIVE_COLOR
+        else:
+            bg_value, fg_value = CHANNEL_DEACTIVE_COLOR
+        self.button['fg'] = fg_value
+        self.button['bg'] = bg_value
 
     def save(self, data, settings):
         """Save a trace into the data"""
