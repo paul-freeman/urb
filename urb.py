@@ -117,21 +117,21 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
     def make_input_frame(self):
         """Create the sub frame for the input values"""
         sub_frame = tk.Frame(self)
-        
+
         # Pressure Entry
         sub_sub_frame = tk.Frame(sub_frame, padx=10)
         tk.Label(sub_sub_frame, text='Pressure: ').pack(side='left')
         self.config['pressure'].set('0.0')
         tk.Entry(sub_sub_frame, textvariable=self.config['pressure']).pack(side='left')
         sub_sub_frame.pack(side='left')
-        
+
         # Lag Entry
         sub_sub_frame = tk.Frame(sub_frame, padx=10)
         tk.Label(sub_sub_frame, text='Time lag: ').pack(side='left')
         self.config['lag'].set('0.0')
         tk.Entry(sub_sub_frame, textvariable=self.config['lag']).pack(side='left')
         sub_sub_frame.pack(side='left')
-        
+
         # Note Entry
         sub_sub_frame = tk.Frame(sub_frame, padx=10)
         tk.Label(sub_sub_frame, text='Note: ').pack(side='left')
@@ -166,7 +166,7 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
             for count, maybe_data in enumerate(reversed(data)):
                 if not maybe_data:
                     continue
-                pressure, lag, note, trace = maybe_data
+                pressure, lag, _, trace = maybe_data
                 sample = len(data) - count # because reversed
                 if len(data) <= 1:
                     value = 0.0
@@ -261,7 +261,9 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
             raw_data = np.loadtxt(path, delimiter=',', skiprows=1)
             while True:
                 try:
-                    self.data[wave_type][sample] = pressure, lag, note, np.reshape(raw_data.T, (2, -1))
+                    self.data[wave_type][sample] = (
+                        pressure, lag, note, np.reshape(raw_data.T, (2, -1))
+                    )
                     break
                 except IndexError:
                     self.data[wave_type].append(None)
