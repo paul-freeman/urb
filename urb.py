@@ -3,6 +3,7 @@ import sys
 import os.path
 import glob
 from time import sleep
+from functools import partial
 from ast import literal_eval
 from tkinter import filedialog
 import tkinter as tk
@@ -30,66 +31,6 @@ STACK_ACTIVE_COLOR = 'green', 'white'
 STACK_CONNECTED_COLOR = 'red', 'white'
 STACK_DISCONNECTED_COLOR = 'grey', 'white'
 
-CHANNEL_ACTIVE_COLOR = 'yellow', 'black'
-CHANNEL_DEACTIVE_COLOR = 'grey', 'white'
-
-DTYPE = '<f4'
-
-
-class TriggeredWave:
-    """Defines a recorded wave with trigger signal"""
-    def __init__(self):
-        self.data = None
-        self.index = 0
-        self.wave_type = ''
-        self.pressure = 0
-        self.time_lag = 0.0
-        
-
-    def load_csv(path):
-        """Load wave data from a CSV file"""
-        values = os.path.splitext(os.path.split(path)[1])[0].split('_')
-        wave_type = values[1]
-        sample = literal_eval(values[2][len('Num'):])
-        pressure = literal_eval(values[3][len('Press'):])
-        lag = literal_eval(values[4][len('Lag'):])
-        raw_data = np.loadtxt(path, dtype=DTYPE, delimiter=',', skiprows=1)
-        for time, volt in raw_data:
-            try:
-                curr_pressure, curr_lag, trace = self.data[wave_type][sample]
-                if curr_pressure != pressure:
-                    raise ValueError('mismatched pressures in data')
-                if curr_lag != lag:
-                    raise ValueError('mismatched lag values in data')
-                trace.append((time, volt))
-            except IndexError:
-                self.data[wave_type].append((pressure, lag, [(time, volt)]))
-            
-
-    def load_data(array):
-        """Load wave data from a NumPy array"""
-        if len(array.shape) != 2 or array.shape[1] != 3:
-            raise AttributeError('array shape must be (n, 3)')
-        self.data = array.astype(DTYPE)
-        self.index = 0
-        self.wave_type = 'NA'
-        self.pressure = 0
-        self.time_lag = 0.0
-
-
-    def write_csv(self, directory):
-        """Write wave to a given directory as CSV"""
-        filename = 'Wave_{}_Num{}_Press{:d}_Lag{:.3f}.csv'.format(
-            self.wave_type,
-            self.index,
-            self.pressure,
-            self.time_lag
-            )
-        path = os.path.join(directory, filename)
-        np.savetxt(path, self.data, fmt='%.6f,%.6f,%.6f', header='Time,Wave(V),Trigger(V)')
-
-
-
 
 class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
     """A basic interface to the Ultrasonic Relay Boxes"""
@@ -103,9 +44,8 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
                        'pressure': tk.StringVar(),
                        'scale': tk.StringVar(),
                        'lag': tk.StringVar(),
-                       'channel': tk.StringVar()
-                       }
-        self.waves = []
+                       'note': tk.StringVar()}
+        self.data = {'P':[], 'S1':[], 'S2':[]}
         self.src = UltrasonicRelayBox(ip_address=URB_SRC_IP_ADDRESS, port=URB_PORT)
         self.rcvr = UltrasonicRelayBox(ip_address=URB_RCV_IP_ADDRESS, port=URB_PORT)
         self.channel_list = [Channel(channelnum + 1) for channelnum in range(CHANNELS)]
@@ -129,25 +69,30 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
             URBFrame(self, src, rcv, num).pack(side='top')
         # Wave/Pressure/TimeLag input
         self.make_input_frame()
-        # Grab buttons
+        # Save Buttons
         frame = tk.Frame(self)
         for wave_type in sorted(self.data):
             sub_frame = tk.Frame(frame)
-            tk.Button(
-                sub_frame,
-                text='Grab {} Wave'.format(wave_type)).pack(side='left')
-            sub_frame.pack(side='left', padx=170)
+            tk.Label(sub_frame, text='Save {}: '.format(wave_type)).pack(side='left')
+            for channel in self.channel_list:
+                channel.button = tk.Button(sub_frame)
+                channel.button['text'] = 'Ch {}'.format(channel.number)
+                cmd = partial(self.save, channel, wave_type)
+                channel.button['command'] = cmd
+                channel.button.pack(side='left')
+            sub_frame.pack(side='left', padx=90)
         frame.pack(side='top')
         # Plots
         self.canvas.get_tk_widget().pack(side='top')
         # Arrangement Radio Buttons
         sub_frame = tk.Frame(self)
         tk.Label(sub_frame, text='Plot type:').pack(side='left')
-        self.config['arrange'].set('count')
+        self.config['arrange'].set('pressure')
         modes = [('Last', 'last'),
                  ('Count', 'count'),
                  ('Pressure', 'pressure'),
-                 ('Both', 'both')]
+                 ('Overlay', 'overlay'),
+                 ('3d', '3d')]
         for text, mode in modes:
             tk.Radiobutton(
                 sub_frame,
@@ -172,33 +117,30 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
     def make_input_frame(self):
         """Create the sub frame for the input values"""
         sub_frame = tk.Frame(self)
+
         # Pressure Entry
         sub_sub_frame = tk.Frame(sub_frame, padx=10)
         tk.Label(sub_sub_frame, text='Pressure: ').pack(side='left')
         self.config['pressure'].set('0.0')
         tk.Entry(sub_sub_frame, textvariable=self.config['pressure']).pack(side='left')
         sub_sub_frame.pack(side='left')
+
         # Lag Entry
         sub_sub_frame = tk.Frame(sub_frame, padx=10)
         tk.Label(sub_sub_frame, text='Time lag: ').pack(side='left')
         self.config['lag'].set('0.0')
         tk.Entry(sub_sub_frame, textvariable=self.config['lag']).pack(side='left')
         sub_sub_frame.pack(side='left')
-        # Channels
+
+        # Note Entry
         sub_sub_frame = tk.Frame(sub_frame, padx=10)
-        tk.Label(sub_sub_frame, text='Activate channels: ').pack(side='left')
-        for channel in self.channel_list[:-1]:
-            if channel.active:
-                bg_value, fg_value = CHANNEL_ACTIVE_COLOR
-            else:
-                bg_value, fg_value = CHANNEL_DEACTIVE_COLOR
-            channel.button = tk.Button(sub_sub_frame, fg=fg_value, bg=bg_value)
-            channel.button['text'] = 'Ch {}'.format(channel.number)
-            channel.button['command'] = channel.toggle_active
-            channel.button.pack(side='left')
-        self.channel_list[-1].toggle_active()
+        tk.Label(sub_sub_frame, text='Note: ').pack(side='left')
+        self.config['note'].set('')
+        tk.Entry(sub_sub_frame, textvariable=self.config['note']).pack(side='left')
         sub_sub_frame.pack(side='left')
+
         sub_frame.pack(side='top')
+
 
     def save(self, channel, wave_type):
         """Call save on the requested channel and redraw"""
@@ -212,15 +154,19 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
         cmap = cm.get_cmap('viridis')
         title = {'P':'P waves', 'S1':'S1 waves', 'S2':'S2 waves'}
         self.fig.clear()
+        axes_list = []
         for i, (wave_type, data) in enumerate(sorted(self.data.items())):
-            if self.config['arrange'].get() == 'both':
+            if self.config['arrange'].get() == '3d':
                 axes = self.fig.add_subplot(1, 3, i+1, projection='3d')
-                axes.clear()
             else:
                 axes = self.fig.add_subplot(1, 3, i+1)
-                axes.clear()
+            axes.clear()
+            axes_list.append(axes)
             axes.set_title(title[wave_type])
-            for count, (pressure, lag, trace) in enumerate(reversed(data)):
+            for count, maybe_data in enumerate(reversed(data)):
+                if not maybe_data:
+                    continue
+                pressure, lag, _, trace = maybe_data
                 sample = len(data) - count # because reversed
                 if len(data) <= 1:
                     value = 0.0
@@ -228,23 +174,61 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
                     value = (sample-1)/(len(data)-1)
                 arrange = self.config['arrange']
                 scale = self.config['scale']
+
                 if arrange.get() == 'last':
+                    # plot last trace
                     axes.plot(trace[0] - lag,
                               trace[1] * float(scale.get()))
                     break
+
                 elif arrange.get() == 'count':
-                    axes.plot(trace[0] - lag,
-                              trace[1] * float(scale.get()) + sample,
-                              color=cmap(value))
+                    # plot traces offset by count
+                    try:
+                        axes.plot(trace[0] - lag,
+                                  trace[1] * float(scale.get()) + sample,
+                                  color=cmap(value))
+                    except (TypeError, IndexError):
+                        print('maybe_data = {}'.format(maybe_data))
+                        print('type(trace[0]) = {}'.format(type(trace[0])))
+                        print('type(trace[1]) = {}'.format(type(trace[1])))
+                        print('type(lag) = {}'.format(type(lag)))
+                        raise
+
                 elif arrange.get() == 'pressure':
+                    # plot traces offset by pressure
                     axes.plot(trace[0] - lag,
                               trace[1] * float(scale.get()) + pressure,
                               color=cmap(value))
-                elif arrange.get() == 'both':
-                    axes.plot(trace[0] - lag,
-                              [sample] * len(trace[0]),
-                              trace[1] * float(scale.get()) + pressure,
-                              color=cmap(value))
+
+                elif arrange.get() == 'overlay':
+                    # plot overlayed traces
+                    try:
+                        axes.plot(trace[0] - lag,
+                                  trace[1] * float(scale.get()),
+                                  color=cmap(value))
+                    except (TypeError, IndexError):
+                        print('maybe_data = {}'.format(maybe_data))
+                        print('type(trace[0]) = {}'.format(type(trace[0])))
+                        print('type(trace[1]) = {}'.format(type(trace[1])))
+                        print('type(lag) = {}'.format(type(lag)))
+                        raise
+
+                elif arrange.get() == '3d':
+                    # plot 3D traces offset by pressure and count
+                    try:
+                        axes.plot(trace[0] - lag,
+                                  [sample] * len(trace[0]),
+                                  trace[1] * float(scale.get()) + pressure,
+                                  color=cmap(value))
+                    except TypeError:
+                        print('maybe_data = {}'.format(maybe_data))
+                        print('type(trace[0]) = {}'.format(type(trace[0])))
+                        print('type(lag) = {}'.format(type(lag)))
+                        raise
+
+        y_min = min(axes.get_ylim()[0] for axes in axes_list)
+        y_max = max(axes.get_ylim()[1] for axes in axes_list)
+        _ = [axes.set_ylim(y_min, y_max, auto=True) for axes in axes_list]
         self.canvas.draw()
 
 
@@ -270,28 +254,19 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
             sample = literal_eval(values[2][len('Num'):])
             pressure = literal_eval(values[3][len('Press'):])
             lag = literal_eval(values[4][len('Lag'):])
-            raw_data = np.loadtxt(
-                path,
-                dtype=[('time', '<f4'),
-                       ('voltage', '<f4')],
-                delimiter=',',
-                skiprows=1)
-            for time, volt in raw_data:
+            try:
+                note = values[5]
+            except IndexError:
+                note = ''
+            raw_data = np.loadtxt(path, delimiter=',', skiprows=1)
+            while True:
                 try:
-                    curr_pressure, curr_lag, trace = self.data[wave_type][sample]
-                    if curr_pressure != pressure:
-                        raise ValueError('mismatched pressures in data')
-                    if curr_lag != lag:
-                        raise ValueError('mismatched lag values in data')
-                    trace.append((time, volt))
+                    self.data[wave_type][sample] = (
+                        pressure, lag, note, np.reshape(raw_data.T, (2, -1))
+                    )
+                    break
                 except IndexError:
-                    self.data[wave_type].append((pressure, lag, [(time, volt)]))
-        for wave_type in self.data:
-            for i, (pressure, lag, trace) in enumerate(self.data[wave_type]):
-                trace = np.asarray(trace).T
-                time = np.asarray(trace[0])
-                volts = np.asarray(trace[1])
-                self.data[wave_type][i] = (pressure, lag, np.array([time, volts]))
+                    self.data[wave_type].append(None)
         self.draw_canvas()
 
 
@@ -307,17 +282,28 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
 
 
     def save_folder(self):
-        """Save CSV data to separate files in a folder"""
-        folder = filedialog.askdirectory()
+        """Save CSV data to separate files in a directory"""
+        directory = filedialog.askdirectory()
+        if not os.path.exists(directory):
+            os.makedirs(directory)
         for wave_type, waves in self.data.items():
-            for sample, (pressure, lag, trace) in enumerate(waves):
-                filename = 'Wave_{}_Num{}_Press{:.4f}_Lag{:.6f}.csv'.format(
-                    wave_type, sample, pressure, lag)
+            for sample, maybe_data in enumerate(waves):
+                if not maybe_data:
+                    continue
+                pressure, lag, note, trace = maybe_data
+                if note == '':
+                    filename = 'Wave_{}_Num{:d}_Press{:d}_Lag{:.3f}.csv'.format(
+                        wave_type, int(sample), int(pressure), lag)
+                else:
+                    valid = ' _-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+                    note = ''.join(['-' if c in ' _' else c for c in note[12:] if c in valid])
+                    filename = 'Wave_{}_Num{:d}_Press{:d}_Lag{:.3f}_{}.csv'.format(
+                        wave_type, int(sample), int(pressure), lag, note)
                 data = []
                 for time, volt in trace.T:
                     data.append((time, volt))
                 save_data = np.asarray(data, dtype=[('time', '<f4'), ('voltage', '<f4')])
-                path = os.path.join(folder, filename)
+                path = os.path.join(directory, filename)
                 np.savetxt(path, save_data, fmt='%.6f,%.6f', header='Time,Voltage')
 
 
@@ -363,18 +349,7 @@ class Channel():
     """A channel on the oscilloscope"""
     def __init__(self, number):
         self.number = number
-        self.active = False
-        self.button = {}
 
-    def toggle_active(self):
-        """Toggle a channel on/off"""
-        self.active = not self.active
-        if self.active:
-            bg_value, fg_value = CHANNEL_ACTIVE_COLOR
-        else:
-            bg_value, fg_value = CHANNEL_DEACTIVE_COLOR
-        self.button['fg'] = fg_value
-        self.button['bg'] = bg_value
 
     def save(self, data, settings):
         """Save a trace into the data"""
