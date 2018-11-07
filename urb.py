@@ -296,7 +296,7 @@ class URBInterface(tk.Frame): # pylint: disable=too-many-ancestors
                         wave_type, int(sample), int(pressure), lag)
                 else:
                     valid = ' _-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-                    note = ''.join(['-' if c in ' _' else c for c in note[12:] if c in valid])
+                    note = ''.join(['-' if c in ' _' else c for c in note[:12] if c in valid])
                     filename = 'Wave_{}_Num{:d}_Press{:d}_Lag{:.3f}_{}.csv'.format(
                         wave_type, int(sample), int(pressure), lag, note)
                 data = []
@@ -365,6 +365,7 @@ class Channel():
             data[settings['wave'].get()].append(
                 (float(settings['pressure'].get()),
                  float(settings['lag'].get()),
+                 settings['note'].get(),
                  np.array([time, volts])))
         except OSError:
             print('connection to {} timed out'.format(OSCILLOSCOPE_IP_ADDRESS))
